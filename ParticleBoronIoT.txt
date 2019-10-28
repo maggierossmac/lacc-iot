@@ -1,0 +1,258 @@
+
+/* 
+   Environmental Logging Internet of Things (ELIOT)
+   
+   This program is free software: you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation, either version 3 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+   Authors: Margaret McCormick and Jayesh Bhakta
+   Institution: Los Angeles City College, Los Angeles, CA 90029
+   Date: 10/15/2019
+   Version: 1.0
+
+   Harware Connections to Particle Boron:
+*/
+
+
+/************************************************************************
+*
+* Include section
+*
+*************************************************************************/
+#include <ThingSpeak.h>
+#include<ArduinoJson.h>
+#include "Particle.h"
+
+
+/************************************************************************
+*
+* Global Variables/Defines
+*
+*************************************************************************/
+
+char deviceName[255]; // device name on cloud
+char topic[255]; //dummy variable for subscription calls
+
+// ThingSpeak access information
+const int myChannelNumber = <enter your channel number here>;
+const char * myWriteAPIKey = "<enter your API key here>";
+const int FIELD_DATE=1;
+const int FIELD_PM1=2;
+const int FIELD_PM2_5=3;
+const int FIELD_PM10=4;
+const int FIELD_CO2=5;
+const int FIELD_HUMIDITY=6;
+const int FIELD_AIR_TEMP=7;
+const int FIELD_SENSOR_ID=8;
+
+//error codes
+const int ERROR_JSON_NOT_PARSED=100;
+const int ERROR_SENSOR_DATA_DATE_INCORRECT=100;
+
+// Global variables
+TCPClient client;
+const size_t READ_BUF_SIZE = 200;
+StaticJsonDocument<500> doc;
+char readBuf[READ_BUF_SIZE];
+
+
+size_t readBufOffset = 0;
+bool inMiddleOfMessage=false;
+
+/************************************************************************
+*
+* function declarations
+*
+*************************************************************************/
+void processBuffer();
+void getDeviceName( const char *topic, const char *data);
+
+
+/************************************************************************
+*
+* Setup
+*
+*************************************************************************/
+void setup() {
+	//the device recieves data on Serial1 ar 4800 Baud
+	Serial1.begin(4800);
+	//device transmits diagnositc data on Serial at 9600 Baud
+	Serial.begin(9600);
+	
+	//begin ThingSpeak
+	ThingSpeak.begin(client);
+	
+	//get the device name
+	Particle.subscribe("particle/device/name", getDeviceName);
+	Particle.publish("particle/device/name");
+	
+	//diagnostic message
+	Serial.println("setup complete");
+}
+
+
+
+/************************************************************************
+*
+* loop function
+*
+*************************************************************************/
+void loop() {
+	char c;
+
+	// Read JSON fromat (only simple flat file supported) data from serial port
+	while((Serial1.available()) && (readBufOffset<(READ_BUF_SIZE-1))) {
+		
+		//read the next character
+		c=Serial1.read();
+	
+		switch(c){
+		    
+		    case '{':
+		        
+		        inMiddleOfMessage=true;
+		        readBuf[0]='{';
+		        readBufOffset=1;
+		        break;
+		    
+		    case '}':
+		    	// End of JSON found, process line
+				
+				// Add character to buffer
+				readBuf[readBufOffset++] = c;
+			
+				
+				//terminate string
+				readBuf[readBufOffset++] = 0;
+				
+				//transmit recieved data for diagnositics
+				Serial.println("New data received");
+				Serial.println(readBuf);
+				
+				//process data in buffer
+				processBuffer();
+				
+				//reset counters
+				readBufOffset = 0;
+				inMiddleOfMessage=false;
+				break;
+		    
+		    default: 
+		        if(inMiddleOfMessage){
+			        // Add character to buffer
+				    readBuf[readBufOffset++] = c;
+		        }
+		}
+		    
+	}
+	
+}
+
+
+
+
+void processBuffer() {
+
+    int pm1;
+    int pm2_5;
+    int pm10;
+    int CO2;
+    float humidity;
+    float airTemp;
+    const char* measurement_date;
+    int errorCode=0;
+    
+    //typical format
+    //{"date":"10/07/2019 21:02:43   ","pm1":0,"pm2.5":0,"pm10":0,"CO2":449,"humidity":43.10,"temp":27.06,"lat":0,"lon":0}
+    
+	//attempt to deserialize received JSON data
+	//strcpy(readBuf,"{\"date\":\"10/07/2019 21:02:43   \",\"pm1\":0,\"pm2.5\":0,\"pm10\":0,\"CO2\":449,\"humidity\":43.10,\"temp\":27.06,\"lat\":0,\"lon\":0}");
+	DeserializationError error=deserializeJson(doc,readBuf);
+	
+	// Test if parsing succeeded
+    if (error) {
+        Serial.println(F("deserializeJson() failed: "));
+        Serial.println(error.c_str());
+        errorCode=ERROR_JSON_NOT_PARSED;
+    }
+    else
+    {
+        //get returned values
+        measurement_date=doc["date"];
+        pm1=doc["pm1"];
+        pm2_5=doc["pm2.5"];
+        pm10=doc["pm10"];
+        CO2=doc["CO2"];
+        humidity=doc["humidity"];
+        airTemp=doc["temp"];
+        
+        
+        Serial.print("date:");
+        Serial.println(measurement_date);
+        
+        Serial.print("pm1:");
+        Serial.println(pm1);
+        
+        Serial.print("pm2_5:");
+        Serial.println(pm2_5);
+        
+        
+        Serial.print("pm10:");
+        Serial.println(pm10);
+        
+        Serial.print("CO2:");
+        Serial.println(CO2);
+        
+        Serial.print("humidty:");
+        Serial.println(humidity);
+        
+        Serial.print("AirTemp:");
+        Serial.println(airTemp);
+        
+        
+        
+    }
+    
+    	
+	if (!errorCode){
+	    
+
+	    ThingSpeak.setField(FIELD_DATE,measurement_date);
+	    ThingSpeak.setField(FIELD_PM1,pm1);
+	    ThingSpeak.setField(FIELD_PM2_5,pm2_5);
+	    ThingSpeak.setField(FIELD_PM10,pm10);
+	    ThingSpeak.setField(FIELD_CO2,CO2);
+	    ThingSpeak.setField(FIELD_HUMIDITY,humidity);
+	    ThingSpeak.setField(FIELD_AIR_TEMP,airTemp);
+	    ThingSpeak.setField(FIELD_SENSOR_ID,deviceName);
+	    ThingSpeak.setStatus("OK");
+	    
+	    ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
+	}
+	
+	
+}
+
+
+/************************************************************************
+*
+* hander for subscribe function to get device name stored in cloud
+*
+*************************************************************************/
+
+void getDeviceName( const char *topic, const char *data){
+    //copy the returned date to the deviceName character array
+    strcpy(deviceName, data);
+}
+
+
